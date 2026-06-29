@@ -1,6 +1,6 @@
 """
-Cache Service Module
-Manages cache storage, retrieval, and lifecycle operations
+Updated Cache Service Module
+Manages cache storage with FILE PERSISTENCE
 """
 
 import json
@@ -9,26 +9,57 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from uuid import uuid4
 import logging
+from src.file_storage import FileStorage
 
 logger = logging.getLogger(__name__)
 
 
 class CacheService:
-    """Service for managing AI cache operations"""
+    """Service for managing AI cache operations with persistent file storage"""
     
-    def __init__(self, storage_backend=None):
+    def __init__(self, storage_backend=None, use_file_storage=True):
         """
         Initialize Cache Service
         
         Args:
             storage_backend: Backend for storage (memory, redis, database, file)
+            use_file_storage: Use file-based persistence (default: True)
         """
-        self.storage = storage_backend or {}
+        if use_file_storage:
+            self.file_storage = FileStorage()
+            self.storage = {}  # In-memory cache for quick access
+        else:
+            self.file_storage = None
+            self.storage = storage_backend or {}
+        
         self.cache_index = {}  # For fast lookups
+        self._load_from_storage()
+        
+    def _load_from_storage(self) -> None:
+        """Load all data from file storage on startup"""
+        if self.file_storage:
+            try:
+                sessions = self.file_storage.get_all_sessions()
+                interactions = self.file_storage.get_all_interactions()
+                cache_entries = self.file_storage.get_all_cache()
+                
+                # Rebuild in-memory storage
+                self.storage.update(sessions)
+                self.storage.update(interactions)
+                self.storage.update(cache_entries)
+                
+                # Rebuild cache index
+                for cache_id, entry in cache_entries.items():
+                    if 'pattern_hash' in entry:
+                        self.cache_index[entry['pattern_hash']] = cache_id
+                
+                logger.info(f"Loaded {len(sessions)} sessions from storage")
+            except Exception as e:
+                logger.error(f"Error loading from storage: {str(e)}")
         
     def store_session(self, session_data: Dict[str, Any]) -> str:
         """
-        Store a new AI session
+        Store a new AI session (PERSISTED)
         
         Args:
             session_data: Session metadata and details
@@ -45,7 +76,7 @@ class CacheService:
             'end_time': session_data.get('end_time'),
             'repository': session_data.get('repository'),
             'branch': session_data.get('branch', 'main'),
-            'agent_name': session_data.get('agent_name'),
+            'ai_provider': session_data.get('ai_provider', 'cache_ai'),
             'total_interactions': 0,
             'total_tokens': 0,
             'duration_seconds': session_data.get('duration_seconds'),
@@ -55,12 +86,17 @@ class CacheService:
         }
         
         self.storage[session_id] = session
-        logger.info(f"Session created: {session_id}")
+        
+        # Persist to file
+        if self.file_storage:
+            self.file_storage.save_session(session_id, session)
+        
+        logger.info(f"Session created and saved: {session_id}")
         return session_id
     
     def log_interaction(self, interaction_data: Dict[str, Any]) -> str:
         """
-        Log an AI-user interaction
+        Log an AI-user interaction (PERSISTED)
         
         Args:
             interaction_data: Interaction details
@@ -81,6 +117,7 @@ class CacheService:
             'type': interaction_data.get('type'),
             'user_input': interaction_data.get('user_input'),
             'ai_response': interaction_data.get('ai_response'),
+            'ai_provider': interaction_data.get('ai_provider', 'cache_ai'),
             'cache_hit': interaction_data.get('cache_hit', False),
             'tokens_used': interaction_data.get('tokens_used', 0),
             'response_time_ms': interaction_data.get('response_time_ms', 0),
@@ -94,12 +131,17 @@ class CacheService:
         self.storage[session_id]['total_interactions'] += 1
         self.storage[session_id]['total_tokens'] += interaction['tokens_used']
         
-        logger.info(f"Interaction logged: {interaction_id} in session {session_id}")
+        # Persist to file
+        if self.file_storage:
+            self.file_storage.save_session(session_id, self.storage[session_id])
+            self.file_storage.save_interaction(interaction_id, interaction)
+        
+        logger.info(f"Interaction logged and saved: {interaction_id}")
         return interaction_id
     
     def cache_pattern(self, pattern: str, response: str, ttl: int = 2592000) -> str:
         """
-        Cache a code pattern and its response
+        Cache a code pattern and its response (PERSISTED)
         
         Args:
             pattern: Input pattern/prompt
@@ -119,6 +161,7 @@ class CacheService:
             'cached_response': response,
             'hit_count': 0,
             'miss_count': 0,
+            'last_hit': None,
             'created_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat(),
             'expires_at': (datetime.now() + timedelta(seconds=ttl)).isoformat(),
@@ -129,7 +172,11 @@ class CacheService:
         self.storage[cache_id] = cache_entry
         self.cache_index[pattern_hash] = cache_id
         
-        logger.info(f"Pattern cached: {cache_id} (hash: {pattern_hash})")
+        # Persist to file
+        if self.file_storage:
+            self.file_storage.save_cache(cache_id, cache_entry)
+        
+        logger.info(f"Pattern cached and saved: {cache_id}")
         return cache_id
     
     def get_cache(self, pattern: str) -> Optional[Dict[str, Any]]:
@@ -163,6 +210,10 @@ class CacheService:
         cache_entry['hit_count'] += 1
         cache_entry['last_hit'] = datetime.now().isoformat()
         
+        # Persist update
+        if self.file_storage:
+            self.file_storage.save_cache(cache_id, cache_entry)
+        
         logger.info(f"Cache hit: {cache_id}")
         return cache_entry
     
@@ -179,7 +230,7 @@ class CacheService:
         """
         sessions = []
         for item in self.storage.values():
-            if 'user_id' in item and (user_id is None or item['user_id'] == user_id):
+            if 'session_id' in item and 'user_id' in item and (user_id is None or item.get('user_id') == user_id):
                 sessions.append(item)
         
         return sorted(sessions, key=lambda x: x['start_time'], reverse=True)[:limit]
@@ -258,7 +309,7 @@ class CacheService:
         Returns:
             Statistics dictionary
         """
-        total_sessions = sum(1 for item in self.storage.values() if 'user_id' in item)
+        total_sessions = sum(1 for item in self.storage.values() if 'session_id' in item and 'user_id' in item)
         total_interactions = sum(1 for item in self.storage.values() if 'interaction_id' in item)
         total_cache_entries = sum(1 for item in self.storage.values() if 'cache_id' in item)
         
