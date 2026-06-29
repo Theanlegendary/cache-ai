@@ -1,0 +1,47 @@
+# Web Framework
+flask==2.3.0
+flask-cors==4.0.0
+flask-restx==0.5.1
+
+# Database
+sqlalchemy==2.0.0
+psycopg2-binary==2.9.0
+pymongo==4.3.0
+
+# Caching
+redis==4.5.0
+
+# Data Processing
+pandas==2.0.0
+numpy==1.24.0
+
+# API & Serialization
+jsonschema==4.16.0
+pydantic==1.10.0
+
+# Utilities
+python-dotenv==1.0.0
+requests==2.31.0
+uuid6==1.0.0
+
+# Testing
+pytest==7.3.0
+pytest-cov==4.0.0
+pytest-flask==1.2.0
+
+# Code Quality
+black==23.1.0
+pylint==2.16.0
+flake8==6.0.0
+
+# Logging
+python-json-logger==2.0.4
+
+# Security
+cryptography==40.0.0
+pyjwt==2.8.0
+bcrypt==4.0.0
+
+# Documentation
+sphinx==6.1.0
+sphinx-rtd-theme==1.2.0
